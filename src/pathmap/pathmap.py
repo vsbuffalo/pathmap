@@ -16,6 +16,25 @@ class PathSet:
     pattern: str
     paths: List[Path]
 
+    def format_pattern(self, func: callable) -> str:
+        """
+        Transform parameters in pattern string using provided function.
+        """
+        if not self.pattern:
+            raise ValueError("No pattern set")
+
+        # Find all parameter names between curly braces
+        import re
+
+        params = re.findall(r"\{([^}]+)\}", self.pattern)
+
+        # Replace each parameter with transformed version
+        result = self.pattern
+        for param in params:
+            result = result.replace(f"{{{param}}}", f"{{{func(param)}}}")
+
+        return result
+
 
 @dataclass(frozen=True)
 class GridState:
@@ -75,7 +94,10 @@ class PathMap:
         return set(re.findall(r"\{([^}]+)\}", pattern))
 
     def _build_directory_path(
-        self, params: Dict[str, Any], filename_params: Set[str]
+        self,
+        params: Dict[str, Any],
+        filename_params: Set[str],
+        exclude: Set,
     ) -> Path:
         """Build directory path from params not used in filename"""
         # Parameters that should be directories (not in filename)
@@ -84,6 +106,8 @@ class PathMap:
         # Use original parameter order from grid_params
         parts = []
         for param in self.grid_params.keys():  # Use original order
+            if param in exclude:
+                continue
             if param in dir_params:  # Only include if it's a directory parameter
                 value = params[param]
                 parts.append(f"{param}__{value}")
@@ -97,7 +121,6 @@ class PathMap:
         try:
             # Create example with both grid params and any special params (like rep)
             example = {k: v[0] for k, v in self.grid_params.items()}
-            print(example)
             pattern.format(**example)
         except KeyError as err:
             msg = f"Pattern contains undefined parameter ({pattern})."
@@ -115,7 +138,7 @@ class PathMap:
             )
             raise ValueError(msg)
 
-    def map_path(self, pattern: str) -> PathSet:
+    def map_path(self, pattern: str, exclude: List = None) -> PathSet:
         """Map parameter combinations to file paths, returning the PathSet."""
         if not self._state.combinations:
             raise ValueError(
@@ -125,23 +148,26 @@ class PathMap:
         # Validate pattern
         self._validate_pattern(pattern)
 
-        concrete_paths = self._make_paths(pattern)
-        pattern_path = self._make_pattern(pattern)
+        exclude = set() if exclude is None else set(exclude)
+        concrete_paths = self._make_paths(pattern, exclude)
+        pattern_path = self._make_pattern(pattern, exclude)
 
         return PathSet(pattern=pattern_path, paths=concrete_paths)
 
-    def map_paths(self, patterns: Dict[str, str]) -> Dict[str, PathSet]:
+    def map_paths(
+        self, patterns: Dict[str, str], exclude: List = None
+    ) -> Dict[str, PathSet]:
         """Map a dictionary of patterns to their own PathSet"""
         assert isinstance(patterns, dict), f"patterns must be a dict, got: {patterns}"
-        return {k: self.map_path(p) for k, p in patterns.items()}
+        return {k: self.map_path(p, exclude) for k, p in patterns.items()}
 
-    def _make_paths(self, pattern: str) -> List[Path]:
+    def _make_paths(self, pattern: str, exclude: Set) -> List[Path]:
         """Internal method to generate concrete paths"""
         filename_params = self._extract_filename_params(pattern)
         paths = []
 
         for combo in self._state.combinations:
-            dir_path = self._build_directory_path(combo, filename_params)
+            dir_path = self._build_directory_path(combo, filename_params, exclude)
             filename = pattern.format(**combo)
             full_path = dir_path / filename
             if self.base_dir:
@@ -150,13 +176,15 @@ class PathMap:
 
         return paths
 
-    def _make_pattern(self, pattern: str) -> str:
+    def _make_pattern(self, pattern: str, exclude: Set) -> str:
         """Internal method to generate wildcard patterns"""
         filename_params = self._extract_filename_params(pattern)
         dir_parts = []
 
         # Only create directory structure for parameters not used in filename
         for param in self.grid_params.keys():
+            if param in exclude:
+                continue
             if param not in filename_params:
                 dir_parts.append(f"{param}__{{{param}}}")
 
