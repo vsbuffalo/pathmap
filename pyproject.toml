@@ -1,0 +1,51 @@
+[project]
+name = "pathmap"
+version = "0.1.0"
+description = "A small library for mapping parameters to a path structure."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    {name = "Vince Buffalo", email = "vsbuffalo@gmail.com"}
+]
+dependencies = [
+    "polars>=1.21.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pathmap"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning",
+]
+
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
