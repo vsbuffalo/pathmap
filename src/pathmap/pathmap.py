@@ -123,7 +123,7 @@ class PathMap:
             example = {k: v[0] for k, v in self.grid_params.items()}
             pattern.format(**example)
         except KeyError as err:
-            msg = f"Pattern contains undefined parameter ({pattern})."
+            msg = f"Pattern contains undefined parameter (pattern: {pattern}, params: {list(self.grid_params.keys())})."
             raise ValueError(msg) from err
         except ValueError as err:
             msg = f"Invalid pattern syntax: {str(err)}"
