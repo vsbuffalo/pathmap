@@ -1,3 +1,4 @@
+import polars as pl
 import pytest
 
 from pathmap import PathMap
@@ -117,3 +118,126 @@ class TestImmutabilityAndViews:
         df = grid.df
         assert len(df) == 3
         assert set(df["model"]) == {"A", "B", "C"}
+
+
+class TestManifestGeneration:
+    def test_basic_manifest(self):
+        """Test basic manifest generation with simple grid"""
+        pm = PathMap({"model": ["A", "B"], "alpha": [0.1]}).expand_grid()
+
+        # Map multiple path types
+        path_sets = pm.map_paths(
+            {"weights": "weights.h5", "metrics": "metrics_{model}.csv"}
+        )
+
+        # Generate manifest
+        manifest = pm.generate_manifest()
+
+        # Check basic properties
+        assert len(manifest) == 2  # Two model values
+        assert set(manifest.columns) == {
+            "model",
+            "alpha",
+            "weights_path",
+            "metrics_path",
+        }
+
+        # Verify paths are correct
+        first_row = manifest.filter(pl.col("model") == "A").to_dicts()[0]
+        # model not in filename, so in directory
+        assert first_row["weights_path"].endswith("model__A/alpha__0.1/weights.h5")
+        # model in filename, so not in directory
+        assert first_row["metrics_path"].endswith("alpha__0.1/metrics_A.csv")
+
+    def test_manifest_with_base_dir(self):
+        """Test manifest generation with base directory"""
+        pm = PathMap({"model": ["A"], "alpha": [0.1]}, base_dir="results").expand_grid()
+
+        _ = pm.map_paths({"output": "output.txt"})
+        manifest = pm.generate_manifest()
+
+        # Check paths include base dir
+        assert manifest["output_path"][0].startswith("results/")
+
+    def test_manifest_with_excluded_params(self):
+        """Test manifest generation with excluded parameters"""
+        pm = PathMap({"model": ["A"], "alpha": [0.1], "rep": [1, 2]}).expand_grid()
+
+        # Exclude rep from directory structure
+        _ = pm.map_paths({"metrics": "metrics.csv"}, exclude=["rep"])
+
+        manifest = pm.generate_manifest()
+
+        # Check paths don't include excluded parameter
+        assert "rep__" not in manifest["metrics_path"][0]
+        # But rep parameter is still in manifest
+        assert "rep" in manifest.columns
+
+    def test_manifest_save_load(self, tmp_path):
+        """Test saving and loading manifest"""
+        output_file = tmp_path / "manifest.csv"
+
+        pm = PathMap({"model": ["A", "B"], "alpha": [0.1]}).expand_grid()
+        pm.map_paths({"output": "output_{model}.txt"})
+
+        # Save manifest
+        manifest = pm.generate_manifest(str(output_file))
+
+        # Load and verify
+        loaded = pl.read_csv(output_file)
+        assert len(loaded) == len(manifest)
+        assert set(loaded.columns) == set(manifest.columns)
+
+    def test_manifest_without_paths(self):
+        """Test manifest generation fails without mapped paths"""
+        pm = PathMap({"model": ["A"]}).expand_grid()
+
+        with pytest.raises(
+            ValueError, match="Must generate parameter combinations and map paths"
+        ):
+            pm.generate_manifest()
+
+    def test_manifest_without_expand(self):
+        """Test manifest generation fails without expanding grid"""
+        pm = PathMap({"model": ["A"]})
+
+        with pytest.raises(ValueError, match="Must generate parameter combinations"):
+            # This should fail because we haven't called expand_grid()
+            pm.map_paths({"output": "output.txt"})
+
+    def test_manifest_complex_patterns(self):
+        """Test manifest with complex path patterns"""
+        pm = PathMap({"model": ["A", "B"], "alpha": [0.1], "rep": [1, 2]}).expand_grid()
+
+        _ = pm.map_paths(
+            {
+                "weights": "model_{model}/rep_{rep}/weights.h5",
+                "metrics": "model_{model}/metrics.csv",
+                "shared": "shared_file.txt",
+            }
+        )
+
+        manifest = pm.generate_manifest()
+
+        # Check all expected columns exist
+        assert set(manifest.columns) == {
+            "model",
+            "alpha",
+            "rep",
+            "weights_path",
+            "metrics_path",
+            "shared_path",
+        }
+
+        # Verify pattern-specific paths
+        first_row = manifest.filter(
+            (pl.col("model") == "A") & (pl.col("rep") == 1)
+        ).to_dicts()[0]
+
+        # Check each path type
+        assert first_row["weights_path"].endswith("model_A/rep_1/weights.h5")
+        assert first_row["metrics_path"].endswith("model_A/metrics.csv")
+        assert first_row["shared_path"].endswith("shared_file.txt")
+
+        # All rows should have same shared path
+        assert len(set(manifest["shared_path"].to_list())) == 1

@@ -35,6 +35,10 @@ class PathSet:
 
         return result
 
+    def get_parameters(self) -> Set[str]:
+        """Get set of parameters used in pattern"""
+        return set(re.findall(r"\{([^}]+)\}", self.pattern))
+
 
 @dataclass(frozen=True)
 class GridState:
@@ -62,6 +66,9 @@ class PathMap:
         self.grid_params = grid_params
         self.base_dir = Path(base_dir) if base_dir else None
         self._state = GridState()
+        self._path_sets: Dict[str, PathSet] = {}
+        # Store parameter mappings at PathMap level
+        self._pattern_params: Dict[str, Set[str]] = {}
 
         if not all(isinstance(v, list) for v in grid_params.values()):
             raise ValueError("All parameter values must be lists")
@@ -82,7 +89,6 @@ class PathMap:
 
     def expand_grid(self) -> PathMap:
         """Generate all parameter combinations"""
-        # Generate base combinations
         keys = list(self.grid_params.keys())
         values = list(self.grid_params.values())
         product = list(itertools.product(*values))
@@ -138,6 +144,21 @@ class PathMap:
             )
             raise ValueError(msg)
 
+    def _make_paths(self, pattern: str, exclude: Set) -> List[Path]:
+        """Internal method to generate concrete paths"""
+        filename_params = self._extract_filename_params(pattern)
+        paths = []
+
+        for combo in self._state.combinations:
+            dir_path = self._build_directory_path(combo, filename_params, exclude)
+            filename = pattern.format(**combo)
+            full_path = dir_path / filename
+            if self.base_dir:
+                full_path = self.base_dir / full_path
+            paths.append(full_path)
+
+        return paths
+
     def map_path(self, pattern: str, exclude: List = None) -> PathSet:
         """Map parameter combinations to file paths, returning the PathSet."""
         if not self._state.combinations:
@@ -157,24 +178,92 @@ class PathMap:
     def map_paths(
         self, patterns: Dict[str, str], exclude: List = None
     ) -> Dict[str, PathSet]:
-        """Map a dictionary of patterns to their own PathSet"""
-        assert isinstance(patterns, dict), f"patterns must be a dict, got: {patterns}"
-        return {k: self.map_path(p, exclude) for k, p in patterns.items()}
+        """Map parameter combinations to file paths, returning PathSets"""
+        if not self._state.combinations:
+            raise ValueError(
+                "Must generate parameter combinations before mapping paths"
+            )
 
-    def _make_paths(self, pattern: str, exclude: Set) -> List[Path]:
-        """Internal method to generate concrete paths"""
-        filename_params = self._extract_filename_params(pattern)
-        paths = []
+        exclude = set() if exclude is None else set(exclude)
+        path_sets = {}
 
+        for key, pattern in patterns.items():
+            # Validate pattern
+            self._validate_pattern(pattern)
+
+            # Generate concrete paths and pattern
+            concrete_paths = self._make_paths(pattern, exclude)
+            pattern_path = self._make_pattern(pattern, exclude)
+
+            # Create PathSet
+            path_set = PathSet(pattern=pattern_path, paths=concrete_paths)
+
+            # Store pattern parameters at PathMap level
+            self._pattern_params[key] = self._extract_filename_params(pattern) - exclude
+
+            # Store PathSet
+            self._path_sets[key] = path_set
+            path_sets[key] = path_set
+
+        return path_sets
+
+    def generate_manifest(self, output_path: Optional[str] = None) -> pl.DataFrame:
+        """
+        Generate a manifest DataFrame combining parameter combinations with paths.
+
+        Args:
+            output_path: Optional path to save manifest as CSV
+
+        Returns:
+            polars.DataFrame with parameters and paths
+        """
+        if not self._state.combinations or not self._path_sets:
+            raise ValueError(
+                "Must generate parameter combinations and map paths before creating manifest"
+            )
+
+        rows = []
         for combo in self._state.combinations:
-            dir_path = self._build_directory_path(combo, filename_params, exclude)
-            filename = pattern.format(**combo)
-            full_path = dir_path / filename
-            if self.base_dir:
-                full_path = self.base_dir / full_path
-            paths.append(full_path)
+            row = combo.copy()
 
-        return paths
+            # Add path for each PathSet
+            for key, path_set in self._path_sets.items():
+                col_name = f"{key}_path"
+
+                # Find matching path based on parameters used in this pattern
+                pattern_params = self._pattern_params[key]
+                if pattern_params & set(combo.keys()):
+                    # Path varies by some parameter in combo
+                    path = self._find_matching_path(path_set, combo)
+                else:
+                    # Shared path across parameters
+                    path = path_set.paths[0]
+
+                row[col_name] = str(path)
+
+            rows.append(row)
+
+        # Convert to DataFrame
+        df = pl.DataFrame(rows)
+
+        if output_path:
+            df.write_csv(output_path)
+
+        return df
+
+    def _find_matching_path(self, path_set: PathSet, params: Dict[str, Any]) -> Path:
+        """Find path matching parameter values"""
+        pattern = path_set.pattern
+        for param, value in params.items():
+            if f"{{{param}}}" in pattern:
+                pattern = pattern.replace(f"{{{param}}}", str(value))
+
+        # Find path matching filled pattern
+        for path in path_set.paths:
+            if str(path).endswith(pattern):
+                return path
+
+        raise ValueError(f"No matching path found for parameters: {params}")
 
     def _make_pattern(self, pattern: str, exclude: Set) -> str:
         """Internal method to generate wildcard patterns"""
