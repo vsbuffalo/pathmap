@@ -126,9 +126,7 @@ class TestManifestGeneration:
         pm = PathMap({"model": ["A", "B"], "alpha": [0.1]}).expand_grid()
 
         # Map multiple path types
-        path_sets = pm.map_paths(
-            {"weights": "weights.h5", "metrics": "metrics_{model}.csv"}
-        )
+        _ = pm.map_paths({"weights": "weights.h5", "metrics": "metrics_{model}.csv"})
 
         # Generate manifest
         manifest = pm.generate_manifest()
