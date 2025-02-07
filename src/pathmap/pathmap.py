@@ -211,16 +211,26 @@ class PathMap:
 
         return path_sets
 
+    def _find_matching_path(self, path_set: PathSet, params: Dict[str, Any]) -> Path:
+        """Find path matching parameter values"""
+        # Get the filename part of the pattern (after last /)
+        pattern_parts = path_set.pattern.split("/")
+        filename_pattern = pattern_parts[-1]
+
+        # Replace parameters in filename pattern
+        for param, value in params.items():
+            if f"{{{param}}}" in filename_pattern:
+                filename_pattern = filename_pattern.replace(f"{{{param}}}", str(value))
+
+        # Find path that ends with our filled filename pattern
+        for path in path_set.paths:
+            if str(path).split("/")[-1] == filename_pattern:
+                return path
+
+        raise ValueError(f"No matching path found for parameters: {params}")
+
     def generate_manifest(self, output_path: Optional[str] = None) -> pl.DataFrame:
-        """
-        Generate a manifest DataFrame combining parameter combinations with paths.
-
-        Args:
-            output_path: Optional path to save manifest as CSV
-
-        Returns:
-            polars.DataFrame with parameters and paths
-        """
+        """Generate a manifest DataFrame combining parameter combinations with paths."""
         if not self._state.combinations or not self._path_sets:
             raise ValueError(
                 "Must generate parameter combinations and "
@@ -234,41 +244,25 @@ class PathMap:
             # Add path for each PathSet
             for key, path_set in self._path_sets.items():
                 col_name = f"{key}_path"
-
-                # Find matching path based on parameters used in this pattern
                 pattern_params = self._pattern_params[key]
-                if pattern_params & set(combo.keys()):
-                    # Path varies by some parameter in combo
-                    path = self._find_matching_path(path_set, combo)
-                else:
-                    # Shared path across parameters
+
+                # Create a filtered combo with only relevant parameters
+                filtered_combo = {k: v for k, v in combo.items() if k in pattern_params}
+
+                # If pattern uses no parameters from combo, use first path
+                if not pattern_params:
                     path = path_set.paths[0]
+                else:
+                    path = self._find_matching_path(path_set, filtered_combo)
 
                 row[col_name] = str(path)
 
             rows.append(row)
 
-        # Convert to DataFrame
         df = pl.DataFrame(rows)
-
         if output_path:
             df.write_csv(output_path)
-
         return df
-
-    def _find_matching_path(self, path_set: PathSet, params: Dict[str, Any]) -> Path:
-        """Find path matching parameter values"""
-        pattern = path_set.pattern
-        for param, value in params.items():
-            if f"{{{param}}}" in pattern:
-                pattern = pattern.replace(f"{{{param}}}", str(value))
-
-        # Find path matching filled pattern
-        for path in path_set.paths:
-            if str(path).endswith(pattern):
-                return path
-
-        raise ValueError(f"No matching path found for parameters: {params}")
 
     def _make_pattern(self, pattern: str, exclude: Set) -> str:
         """Internal method to generate wildcard patterns"""

@@ -239,3 +239,61 @@ class TestManifestGeneration:
 
         # All rows should have same shared path
         assert len(set(manifest["shared_path"].to_list())) == 1
+
+    def test_manifest_partial_parameter_patterns(self):
+        """Test manifest generation when patterns only use some parameters"""
+        pm = PathMap(
+            {"model": ["A", "B"], "dataset": ["train", "test"], "rep": [1, 2]}
+        ).expand_grid()
+
+        pm.map_paths(
+            {
+                "model_only": "model_{model}.txt",  # Only uses model
+                "data_only": "{dataset}.csv",  # Only uses dataset
+                # Uses model and dataset
+                "model_data": "{model}_{dataset}.txt",
+                "all": "{model}_{dataset}_rep{rep}.txt",  # Uses all parameters
+            }
+        )
+
+        manifest = pm.generate_manifest()
+
+        # Get unique paths for each pattern type
+        model_only_paths = set(manifest["model_only_path"])
+        data_only_paths = set(manifest["data_only_path"])
+        model_data_paths = set(manifest["model_data_path"])
+        all_paths = set(manifest["all_path"])
+
+        # Check number of unique paths for each pattern type
+        # A.txt, B.txt
+        msg = f"Expected 2 model paths, got {len(model_only_paths)}"
+        assert len(model_only_paths) == 2, msg
+
+        # train.csv, test.csv
+        msg = f"Expected 2 dataset paths, got {len(data_only_paths)}"
+        assert len(data_only_paths) == 2, msg
+
+        # A_train.txt, A_test.txt, B_train.txt, B_test.txt
+        msg = f"Expected 4 model-data paths, got {len(model_data_paths)}"
+        assert len(model_data_paths) == 4, msg
+
+        # All combinations
+        msg = f"Expected 8 total paths, got {len(all_paths)}"
+        assert len(all_paths) == 8, msg
+
+        # Verify specific path patterns
+        model_paths = {path.split("/")[-1] for path in model_only_paths}
+        expect_model = {"model_A.txt", "model_B.txt"}
+        msg = f"Unexpected model paths: {model_paths}"
+        assert model_paths == expect_model, msg
+
+        data_paths = {path.split("/")[-1] for path in data_only_paths}
+        expect_data = {"train.csv", "test.csv"}
+        msg = f"Unexpected dataset paths: {data_paths}"
+        assert data_paths == expect_data, msg
+
+        # Check path counts
+        model_path_counts = manifest["model_only_path"].value_counts()
+        counts = model_path_counts["count"].to_list()
+        msg = "Model paths should appear 4 times each (2 datasets × 2 reps)"
+        assert all(count == 4 for count in counts), msg
