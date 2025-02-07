@@ -1,6 +1,6 @@
 [project]
 name = "pathmap"
-version = "0.1.5"
+version = "0.1.7"
 description = "A small library for mapping parameters to a path structure."
 readme = "README.md"
 requires-python = ">=3.11"

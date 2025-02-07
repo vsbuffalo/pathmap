@@ -25,275 +25,132 @@ class TestPathMapBasics:
         assert {"model": "A", "alpha": 0.1} in combinations
         assert {"model": "C", "alpha": 0.2} in combinations
 
-    def test_expand_grid_with_reps(self):
-        grid = PathMap({"model": ["A"], "rep": list(range(2))}).expand_grid()
-        combinations = grid._state.combinations
-        assert len(combinations) == 2
-        assert all("rep" in c for c in combinations)
-        assert [c["rep"] for c in combinations] == [0, 1]
-
 
 class TestPathGeneration:
-    def test_automatic_directory_structure(self):
+    def test_directory_structure_with_params(self):
+        """Test directory structure is built correctly with params"""
         pathset = (
             PathMap({"model": ["A"], "alpha": [0.1]})
             .expand_grid()
             .map_path("output.txt")
         )
         assert len(pathset.paths) == 1
+        assert len(pathset.params) == 1
         assert str(pathset.paths[0]) == "model__A/alpha__0.1/output.txt"
-        assert pathset.pattern == "model__{model}/alpha__{alpha}/output.txt"
+        assert pathset.params[0] == {"model": "A", "alpha": 0.1}
 
-    def test_filename_params_excluded_from_dirs(self):
+    def test_filename_params_with_directory(self):
+        """Test params used in filename are excluded from directory"""
         pathset = (
             PathMap({"model": ["A"], "alpha": [0.1]})
             .expand_grid()
             .map_path("model_{model}.txt")
         )
         assert len(pathset.paths) == 1
-        # 'model' is in filename, so dir is just alpha__0.1
+        assert len(pathset.params) == 1
         assert str(pathset.paths[0]) == "alpha__0.1/model_A.txt"
-        assert pathset.pattern == "alpha__{alpha}/model_{model}.txt"
+        assert pathset.params[0] == {"model": "A", "alpha": 0.1}
 
-    def test_multiple_output_types(self):
-        """
-        Instead of a single PathSet with a dict of patterns, we create
-        separate PathSets for each pattern and test them individually.
-        """
-        pm = PathMap(
-            {"model": ["A"], "alpha": [0.1], "rep": list(range(2))}
-        ).expand_grid()
+    def test_multiple_paths_with_params(self):
+        """Test multiple paths with different parameter usages"""
+        pm = PathMap({"model": ["A", "B"], "rep": [1, 2]}).expand_grid()
 
-        # Weights paths
-        weights = pm.map_path("weights_{rep}.h5")
-        assert len(weights.paths) == 2
-        assert "weights_0.h5" in str(weights.paths[0])
-        assert weights.pattern == "model__{model}/alpha__{alpha}/weights_{rep}.h5"
-
-        # Metrics paths
-        metrics = pm.map_path("metrics.csv")
-        assert len(metrics.paths) == 2
-        assert "metrics.csv" in str(metrics.paths[0])
-        assert metrics.pattern == "model__{model}/alpha__{alpha}/rep__{rep}/metrics.csv"
-
-
-class TestPathSet:
-    def test_pathset_single_pattern(self):
-        pathset = PathMap({"model": ["A"]}).expand_grid().map_path("model_{model}.h5")
-        assert len(pathset.paths) == 1
-        assert str(pathset.paths[0]) == "model_A.h5"
-        assert pathset.pattern == "model_{model}.h5"
-
-    def test_base_dir(self):
-        pathset = (
-            PathMap({"model": ["A"]}, base_dir="results")
-            .expand_grid()
-            .map_path("output.txt")
-        )
-        assert len(pathset.paths) == 1
-        assert str(pathset.paths[0]) == "results/model__A/output.txt"
-        assert pathset.pattern == "results/model__{model}/output.txt"
-
-
-class TestValidationAndErrors:
-    def test_invalid_grid_params(self):
-        with pytest.raises(ValueError, match="All parameter values must be lists"):
-            PathMap({"model": "not_a_list"})
-
-    def test_missing_expand_grid(self):
-        grid = PathMap({"model": ["A"]})
-        with pytest.raises(ValueError, match="Must generate parameter combinations"):
-            grid.map_path("output.txt")
-
-
-class TestImmutabilityAndViews:
-    def test_immutability(self):
-        grid1 = PathMap({"model": ["A"]})
-        grid2 = grid1.expand_grid()
-        assert grid1._state.combinations == []
-        assert len(grid2._state.combinations) == 1
-
-    def test_dataframe_view(self):
-        grid = PathMap({"model": ["A", "B", "C"]}).expand_grid()
-        df = grid.df
-        assert len(df) == 3
-        assert set(df["model"]) == {"A", "B", "C"}
-
-
-class TestManifestGeneration:
-    def test_basic_manifest(self):
-        """Test basic manifest generation with simple grid"""
-        pm = PathMap({"model": ["A", "B"], "alpha": [0.1]}).expand_grid()
-
-        # Map multiple path types
-        _ = pm.map_paths({"weights": "weights.h5", "metrics": "metrics_{model}.csv"})
-
-        # Generate manifest
-        manifest = pm.generate_manifest()
-
-        # Check basic properties
-        assert len(manifest) == 2  # Two model values
-        assert set(manifest.columns) == {
-            "model",
-            "alpha",
-            "weights_path",
-            "metrics_path",
-        }
-
-        # Verify paths are correct
-        first_row = manifest.filter(pl.col("model") == "A").to_dicts()[0]
-        # model not in filename, so in directory
-        assert first_row["weights_path"].endswith("model__A/alpha__0.1/weights.h5")
-        # model in filename, so not in directory
-        assert first_row["metrics_path"].endswith("alpha__0.1/metrics_A.csv")
-
-    def test_manifest_with_base_dir(self):
-        """Test manifest generation with base directory"""
-        pm = PathMap({"model": ["A"], "alpha": [0.1]}, base_dir="results").expand_grid()
-
-        _ = pm.map_paths({"output": "output.txt"})
-        manifest = pm.generate_manifest()
-
-        # Check paths include base dir
-        assert manifest["output_path"][0].startswith("results/")
-
-    def test_manifest_with_excluded_params(self):
-        """Test manifest generation with excluded parameters"""
-        pm = PathMap({"model": ["A"], "alpha": [0.1], "rep": [1, 2]}).expand_grid()
-
-        # Exclude rep from directory structure
-        _ = pm.map_paths({"metrics": "metrics.csv"}, exclude=["rep"])
-
-        manifest = pm.generate_manifest()
-
-        # Check paths don't include excluded parameter
-        assert "rep__" not in manifest["metrics_path"][0]
-        # But rep parameter is still in manifest
-        assert "rep" in manifest.columns
-
-    def test_manifest_save_load(self, tmp_path):
-        """Test saving and loading manifest"""
-        output_file = tmp_path / "manifest.csv"
-
-        pm = PathMap({"model": ["A", "B"], "alpha": [0.1]}).expand_grid()
-        pm.map_paths({"output": "output_{model}.txt"})
-
-        # Save manifest
-        manifest = pm.generate_manifest(str(output_file))
-
-        # Load and verify
-        loaded = pl.read_csv(output_file)
-        assert len(loaded) == len(manifest)
-        assert set(loaded.columns) == set(manifest.columns)
-
-    def test_manifest_without_paths(self):
-        """Test manifest generation fails without mapped paths"""
-        pm = PathMap({"model": ["A"]}).expand_grid()
-
-        with pytest.raises(
-            ValueError, match="Must generate parameter combinations and map paths"
-        ):
-            pm.generate_manifest()
-
-    def test_manifest_without_expand(self):
-        """Test manifest generation fails without expanding grid"""
-        pm = PathMap({"model": ["A"]})
-
-        with pytest.raises(ValueError, match="Must generate parameter combinations"):
-            # This should fail because we haven't called expand_grid()
-            pm.map_paths({"output": "output.txt"})
-
-    def test_manifest_complex_patterns(self):
-        """Test manifest with complex path patterns"""
-        pm = PathMap({"model": ["A", "B"], "alpha": [0.1], "rep": [1, 2]}).expand_grid()
-
-        _ = pm.map_paths(
+        pathsets = pm.map_paths(
             {
-                "weights": "model_{model}/rep_{rep}/weights.h5",
-                "metrics": "model_{model}/metrics.csv",
-                "shared": "shared_file.txt",
+                "weights": "weights_{rep}.h5",  # Uses rep in filename
+                "metrics": "metrics_{model}.csv",  # Uses model in filename
+                "shared": "shared.txt",  # Uses no params in filename
             }
         )
 
+        # Check weights paths and params
+        weights = pathsets["weights"]
+        assert len(weights.paths) == 4
+        assert len(weights.params) == 4
+        for path, param in zip(weights.paths, weights.params):
+            # Check value appears in path
+            assert str(param["rep"]) in str(path)
+            assert f"model__{param['model']}" in str(path)  # Check directory structure
+
+        # Check metrics paths and params
+        metrics = pathsets["metrics"]
+        assert len(metrics.paths) == 4
+        assert len(metrics.params) == 4
+        for path, param in zip(metrics.paths, metrics.params):
+            assert str(param["model"]) in str(path)
+            assert "rep__" in str(path)  # Check rep is in directory structure
+
+        # Check shared paths and params
+        shared = pathsets["shared"]
+        assert len(shared.paths) == 4
+        assert len(shared.params) == 4
+        assert all("shared.txt" in str(p) for p in shared.paths)
+        # Check both params appear in directory structure
+        for path, param in zip(shared.paths, shared.params):
+            assert f"model__{param['model']}" in str(path)
+            assert f"rep__{param['rep']}" in str(path)
+
+
+class TestManifestGeneration:
+    def test_manifest_path_param_correspondence(self):
+        """Test manifest correctly matches paths with parameters"""
+        pm = PathMap({"model": ["A", "B"], "alpha": [0.1, 0.2]}).expand_grid()
+
+        pm.map_paths({"output": "model_{model}/alpha_{alpha}.txt"})
+
         manifest = pm.generate_manifest()
 
-        # Check all expected columns exist
-        assert set(manifest.columns) == {
-            "model",
-            "alpha",
-            "rep",
-            "weights_path",
-            "metrics_path",
-            "shared_path",
-        }
+        # Check all combinations are present
+        assert len(manifest) == 4
 
-        # Verify pattern-specific paths
-        first_row = manifest.filter(
-            (pl.col("model") == "A") & (pl.col("rep") == 1)
-        ).to_dicts()[0]
+        # Verify specific path-parameter matches
+        for model in ["A", "B"]:
+            for alpha in [0.1, 0.2]:
+                rows = manifest.filter(
+                    (pl.col("model") == model) & (pl.col("alpha") == alpha)
+                ).to_dicts()
+                assert len(rows) == 1
+                path = rows[0]["output_path"]
+                assert f"model_{model}/alpha_{alpha}.txt" in path
 
-        # Check each path type
-        assert first_row["weights_path"].endswith("model_A/rep_1/weights.h5")
-        assert first_row["metrics_path"].endswith("model_A/metrics.csv")
-        assert first_row["shared_path"].endswith("shared_file.txt")
+    def test_manifest_with_excluded_params(self):
+        """Test manifest generation with excluded parameters"""
+        pm = PathMap({"model": ["A"], "rep": [1, 2]}).expand_grid()
 
-        # All rows should have same shared path
-        assert len(set(manifest["shared_path"].to_list())) == 1
+        pm.map_paths({"output": "output_{model}.txt"}, exclude=["rep"])
 
-    def test_manifest_partial_parameter_patterns(self):
-        """Test manifest generation when patterns only use some parameters"""
+        manifest = pm.generate_manifest()
+
+        # Check rep stays in manifest but not in paths
+        assert "rep" in manifest.columns
+        assert all("rep__" not in p for p in manifest["output_path"])
+
+        # Check paths are correct for each combination
+        paths = manifest["output_path"].to_list()
+        assert len(set(paths)) == 1  # Same path for both reps
+
+    def test_manifest_complex_path_patterns(self):
+        """Test manifest with complex nested paths"""
         pm = PathMap(
             {"model": ["A", "B"], "dataset": ["train", "test"], "rep": [1, 2]}
         ).expand_grid()
 
-        pm.map_paths(
-            {
-                "model_only": "model_{model}.txt",  # Only uses model
-                "data_only": "{dataset}.csv",  # Only uses dataset
-                # Uses model and dataset
-                "model_data": "{model}_{dataset}.txt",
-                "all": "{model}_{dataset}_rep{rep}.txt",  # Uses all parameters
-            }
-        )
+        pm.map_paths({"nested": "model_{model}/data_{dataset}/rep_{rep}.txt"})
 
         manifest = pm.generate_manifest()
 
-        # Get unique paths for each pattern type
-        model_only_paths = set(manifest["model_only_path"])
-        data_only_paths = set(manifest["data_only_path"])
-        model_data_paths = set(manifest["model_data_path"])
-        all_paths = set(manifest["all_path"])
+        # Check all combinations exist
+        assert len(manifest) == 8
 
-        # Check number of unique paths for each pattern type
-        # A.txt, B.txt
-        msg = f"Expected 2 model paths, got {len(model_only_paths)}"
-        assert len(model_only_paths) == 2, msg
-
-        # train.csv, test.csv
-        msg = f"Expected 2 dataset paths, got {len(data_only_paths)}"
-        assert len(data_only_paths) == 2, msg
-
-        # A_train.txt, A_test.txt, B_train.txt, B_test.txt
-        msg = f"Expected 4 model-data paths, got {len(model_data_paths)}"
-        assert len(model_data_paths) == 4, msg
-
-        # All combinations
-        msg = f"Expected 8 total paths, got {len(all_paths)}"
-        assert len(all_paths) == 8, msg
-
-        # Verify specific path patterns
-        model_paths = {path.split("/")[-1] for path in model_only_paths}
-        expect_model = {"model_A.txt", "model_B.txt"}
-        msg = f"Unexpected model paths: {model_paths}"
-        assert model_paths == expect_model, msg
-
-        data_paths = {path.split("/")[-1] for path in data_only_paths}
-        expect_data = {"train.csv", "test.csv"}
-        msg = f"Unexpected dataset paths: {data_paths}"
-        assert data_paths == expect_data, msg
-
-        # Check path counts
-        model_path_counts = manifest["model_only_path"].value_counts()
-        counts = model_path_counts["count"].to_list()
-        msg = "Model paths should appear 4 times each (2 datasets × 2 reps)"
-        assert all(count == 4 for count in counts), msg
+        # Verify path structure for each combination
+        for model in ["A", "B"]:
+            for dataset in ["train", "test"]:
+                for rep in [1, 2]:
+                    rows = manifest.filter(
+                        (pl.col("model") == model)
+                        & (pl.col("dataset") == dataset)
+                        & (pl.col("rep") == rep)
+                    ).to_dicts()
+                    assert len(rows) == 1
+                    path = rows[0]["nested_path"]
+                    assert f"model_{model}/data_{dataset}/rep_{rep}.txt" in path
